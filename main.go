@@ -104,7 +104,12 @@ func loadConfig(path string) (config, error) {
 func main() {
 	path := flag.String("config", "forge-runner.json", "config file")
 	once := flag.Bool("once", false, "run at most one job, then exit")
+	showVersion := flag.Bool("version", false, "print the version and protocol, then exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("forge-runner %s, runner protocol %d\n", version, protocol)
+		return
+	}
 	cfg, err := loadConfig(*path)
 	if err != nil {
 		log.Fatal(err)
