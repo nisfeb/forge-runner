@@ -1,0 +1,14 @@
+{
+  "on": {"branches": ["main"]},
+  "jobs": {
+    "test": {
+      "runs-on": ["linux"],
+      "timeout": 15,
+      "steps": [
+        {"run": "go vet ./..."},
+        {"run": "go test -count=1 ./..."},
+        {"run": "GOOS=windows go build -o /dev/null . && GOOS=darwin GOARCH=arm64 go build -o /dev/null ."}
+      ]
+    }
+  }
+}
