@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -93,7 +94,7 @@ func runAgainst(t *testing.T, f *fakeForge) {
 		http: srv.Client(),
 	}
 	done := make(chan error, 1)
-	go func() { done <- c.run(true) }()
+	go func() { done <- c.run(context.Background(), true) }()
 	select {
 	case err := <-done:
 		if err != nil {

@@ -36,7 +36,7 @@ type step struct {
 
 const (
 	flushEvery = 5 * time.Second
-	beatEvery  = 60 * time.Second // Forge fails a job silent for 5 minutes
+	beatEvery  = 10 * time.Second // a quiet build still hears a cancel within 10 s
 	chunkMax   = 16 * 1024        // Forge keeps at most 16 KB per chunk
 )
 
@@ -73,14 +73,20 @@ func (l *logger) printf(format string, a ...any) {
 func (l *logger) flush(beat bool) {
 	l.mu.Lock()
 	n := min(len(l.buf), chunkMax)
-	if n == 0 && !(beat && time.Since(l.last) >= beatEvery) {
+	// the second's margin keeps a 5 s ticker from missing the 10 s beat by
+	// the length of a round trip
+	if n == 0 && !(beat && time.Since(l.last) >= beatEvery-time.Second) {
 		l.mu.Unlock()
 		return
 	}
 	text := string(l.buf[:n])
 	l.buf = l.buf[n:]
+	// an empty post is a heartbeat: Forge keeps no chunk for it, so it
+	// takes no sequence number
 	seq := l.seq
-	l.seq++
+	if n > 0 {
+		l.seq++
+	}
 	l.last = time.Now()
 	l.mu.Unlock()
 	var ans struct {
@@ -141,10 +147,10 @@ func (l *logger) pump(stop <-chan struct{}, done chan<- struct{}) {
 
 // runJob fetches the source, runs each step, streams the log, and reports
 // the outcome. The job's directory is removed afterwards.
-func (c *client) runJob(j job) {
+func (c *client) runJob(runner context.Context, j job) {
 	log.Printf("%s: %s at %.12s", j.Job, j.Repo, j.Sha)
 	limit := time.Duration(max(j.Timeout, 1)) * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	ctx, cancel := context.WithTimeout(runner, limit)
 	defer cancel()
 	l := &logger{c: c, j: j, cancel: cancel, last: time.Now()}
 	stop, flushed := make(chan struct{}), make(chan struct{})
@@ -158,8 +164,11 @@ func (c *client) runJob(j job) {
 		defer os.RemoveAll(dir)
 		status, why = c.steps(ctx, l, j, dir)
 	}
-	if l.cancelled() {
+	switch {
+	case l.cancelled():
 		status, why = "cancelled", "cancelled from Forge"
+	case runner.Err() != nil:
+		status, why = "failed", "the runner was stopped"
 	}
 	l.printf("==> %s %s", status, why)
 	close(stop)

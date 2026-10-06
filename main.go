@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,8 +15,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -114,14 +117,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// a stop signal cancels the running job, which kills its process group
+	// and reports it, so a stopped service leaves no orphaned build behind
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	c := &client{cfg: cfg, http: &http.Client{Timeout: 2 * time.Minute}}
-	if err := c.run(*once); err != nil {
+	if err := c.run(ctx, *once); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// run says hello, then polls for jobs until a fatal answer.
-func (c *client) run(once bool) error {
+// run says hello, then polls for jobs until a fatal answer or ctx ends.
+func (c *client) run(ctx context.Context, once bool) error {
 	var hi struct {
 		Poll int `json:"poll"`
 	}
@@ -141,7 +148,9 @@ func (c *client) run(once bool) error {
 			return err
 		}
 		log.Printf("hello: %v; retrying in 30s", err)
-		time.Sleep(30 * time.Second)
+		if sleep(ctx, 30*time.Second) {
+			return nil
+		}
 	}
 	every := time.Duration(max(hi.Poll, 5)) * time.Second
 	log.Printf("connected to %s as %v, polling every %s", c.cfg.Ship, c.cfg.Labels, every)
@@ -154,12 +163,24 @@ func (c *client) run(once bool) error {
 		case err != nil:
 			log.Printf("poll: %v", err)
 		case got:
-			c.runJob(j)
-			if once {
+			c.runJob(ctx, j)
+			if once || ctx.Err() != nil {
 				return nil
 			}
 			continue
 		}
-		time.Sleep(every)
+		if sleep(ctx, every) {
+			return nil
+		}
+	}
+}
+
+// sleep waits d, or less if ctx ends first, and says whether it ended.
+func sleep(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
